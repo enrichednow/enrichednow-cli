@@ -1,0 +1,4 @@
+# GoReleaser's output and locally built binaries
+/dist/
+/enrichednow
+/enrichednow.exe
