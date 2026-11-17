@@ -23,6 +23,8 @@ BASE="${ENRICHEDNOW_DOWNLOAD_BASE:-}"
 say() { printf '%s\n' "$*"; }
 fail() { printf 'install.sh: %s\n' "$*" >&2; exit 1; }
 have() { command -v "$1" >/dev/null 2>&1; }
+# A download that stalls is given up after 20 seconds without data and tried again, three times at most.
+fetch() { curl -fsSL --retry 3 --retry-delay 1 --connect-timeout 15 --speed-limit 1024 --speed-time 20 "$@"; }
 
 have curl || fail "curl is needed"
 have tar || fail "tar is needed"
@@ -41,7 +43,7 @@ esac
 if [ -z "$VERSION" ]; then
   [ -z "$BASE" ] || fail "set ENRICHEDNOW_VERSION when ENRICHEDNOW_DOWNLOAD_BASE is set"
   # The "latest" page redirects to the newest release's tag.
-  latest=$(curl -fsSLI -o /dev/null -w '%{url_effective}' "https://github.com/$REPO/releases/latest") ||
+  latest=$(fetch -I -o /dev/null -w '%{url_effective}' "https://github.com/$REPO/releases/latest") ||
     fail "could not find the latest release of $REPO"
   VERSION="${latest##*/}"
   case "$VERSION" in v[0-9]*) ;; *) fail "could not find the latest release of $REPO" ;; esac
@@ -54,8 +56,8 @@ tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT INT TERM
 
 say "Downloading enrichednow $VERSION for $os/$arch"
-curl -fsSL -o "$tmp/$archive" "$BASE/$archive" || fail "could not download $BASE/$archive"
-curl -fsSL -o "$tmp/checksums.txt" "$BASE/checksums.txt" || fail "could not download $BASE/checksums.txt"
+fetch -o "$tmp/$archive" "$BASE/$archive" || fail "could not download $BASE/$archive"
+fetch -o "$tmp/checksums.txt" "$BASE/checksums.txt" || fail "could not download $BASE/checksums.txt"
 
 want=$(awk -v name="$archive" '$2 == name { print $1 }' "$tmp/checksums.txt")
 [ -n "$want" ] || fail "checksums.txt does not list $archive"
