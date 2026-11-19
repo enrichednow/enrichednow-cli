@@ -62,7 +62,11 @@ func (a *App) classify(err error) *cliError {
 	}
 	var api *enrichednow.APIError
 	if errors.As(err, &api) {
-		return apiFailure(api)
+		e := apiFailure(api)
+		if errors.Is(api, enrichednow.ErrServer) && api.Method == "POST" && strings.HasSuffix(api.Path, "/runs") {
+			e.hint = a.startHint()
+		}
+		return e
 	}
 	var failed *enrichednow.RunFailedError
 	if errors.As(err, &failed) {
@@ -85,7 +89,7 @@ func (a *App) classify(err error) *cliError {
 			e.hint = "Check your connection, and --api-url / " + envAPIURL + ". Then try again."
 		}
 		if conn.Method == "POST" && strings.HasSuffix(conn.Path, "/runs") {
-			e.hint = "The run may have been created all the same: look at `enrichednow runs list` before starting it again."
+			e.hint = a.startHint()
 		}
 		return e
 	}
@@ -97,6 +101,15 @@ func (a *App) classify(err error) *cliError {
 	}
 	msg := strings.TrimPrefix(err.Error(), "enrichednow: ")
 	return &cliError{code: "error", msg: msg, exit: exitError}
+}
+
+// startHint is what to do when starting a run failed without a clear answer: the run may exist.
+func (a *App) startHint() string {
+	if a.runKey == "" {
+		return "The run may have been created all the same: look at `enrichednow runs list` before starting it again."
+	}
+	return fmt.Sprintf("The run may have been created all the same. Run the same command with `--idempotency-key %s`: "+
+		"it gives back that run if there is one, and starts one if there is not.", a.runKey)
 }
 
 func apiFailure(api *enrichednow.APIError) *cliError {

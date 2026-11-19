@@ -27,6 +27,9 @@ func (a *App) cmdRun() *cobra.Command {
 		noWait    bool
 		timeout   time.Duration
 		limit     int
+		key       string
+		hook      string
+		written   string
 	)
 	cmd := &cobra.Command{
 		Use:     "run <scraper-id>",
@@ -46,8 +49,15 @@ field, true/false for a boolean, a,b,c for a list — and a string field stays a
 Progress and the summary go to standard error and the records to standard output, so the output can be piped.
 The exit code is 0 when the run ended ok or partial, and 3 when it ended failed, unsupported or cancelled.
 
-Starting a run is never retried: if the request fails without an answer, look at "enrichednow runs list" before
-running it again. Interrupting the wait (Ctrl-C) does not stop the run; "enrichednow runs cancel <id>" does.`,
+The request that starts a run carries an idempotency key, so it is sent again after a connection error or a
+server error without ever starting a second run. Give your own with --idempotency-key to make the command safe to
+repeat: for 24 hours the same key and the same input give back the run the first command started. When the start
+fails all the same, the error says the key to try again with.
+
+--format csv or ndjson prints the records as the API writes them, a page of 1000 at a time: a CSV has a column
+for each field of the scraper's record schema, in its order. --output formats the records here instead.
+
+Interrupting the wait (Ctrl-C) does not stop the run; "enrichednow runs cancel <id>" does.`,
 		Example: `  # Job openings from an applicant-tracking-system board, as a table
   enrichednow run ats.board --input board_url=https://boards.greenhouse.io/acme
 
@@ -64,13 +74,25 @@ running it again. Interrupting the wait (Ctrl-C) does not stop the run; "enriche
 
   # Start it and come back later
   id=$(enrichednow run careers.company --input domain=acme.com --no-wait)
-  enrichednow runs wait "$id" && enrichednow runs records "$id" -o jsonl`,
+  enrichednow runs wait "$id" && enrichednow runs records "$id" -o jsonl
+
+  # Safe to repeat from a scheduled job: the same key never starts a second run
+  enrichednow run careers.company --input domain=acme.com --idempotency-key acme-2026-11-20 --format csv > jobs.csv
+
+  # Be told when it ends
+  enrichednow run careers.company --input domain=acme.com --no-wait --webhook-url https://example.com/hooks/enrichednow`,
 		Args:              exactArgs("scraper-id"),
 		ValidArgsFunction: a.completeScrapers,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx, scraperID := cmd.Context(), args[0]
 			if _, err := a.outputFormat(); err != nil {
 				return err
+			}
+			if err := a.checkWritten(written); err != nil {
+				return err
+			}
+			if key != "" && !validKey(key) {
+				return &cliError{code: "usage", msg: "--idempotency-key must be 1 to 255 visible characters, without spaces", exit: exitUsage}
 			}
 			client, err := a.client(true)
 			if err != nil {
@@ -81,9 +103,13 @@ running it again. Interrupting the wait (Ctrl-C) does not stop the run; "enriche
 				return err
 			}
 			progress := a.newProgress("Starting " + scraperID)
-			params := &enrichednow.RunParams{Wait: firstWait}
+			if key == "" {
+				key = newKey()
+			}
+			a.runKey = key
+			params := &enrichednow.RunParams{Wait: firstWait, IdempotencyKey: key, WebhookURL: hook}
 			if noWait {
-				params = nil
+				params.Wait = 0
 			}
 			run, err := client.Scrapers.Run(ctx, scraperID, input, params)
 			progress.stop()
@@ -105,9 +131,15 @@ running it again. Interrupting the wait (Ctrl-C) does not stop the run; "enriche
 			if err := a.summary(run); err != nil {
 				return err
 			}
+			if written != "" {
+				return a.writeExport(ctx, client, run.ID, written)
+			}
 			return a.printRecords(ctx, client, run.ID, limit)
 		},
 	}
+	cmd.Flags().StringVar(&key, "idempotency-key", "", "name this start (any `text`, no spaces): repeated with the same key and input, it gives back the same run")
+	cmd.Flags().StringVar(&hook, "webhook-url", "", "an https `URL` that is sent a signed POST when this run ends (needs `enrichednow webhooks run-secret` once)")
+	a.addFormatFlag(cmd, &written)
 	cmd.Flags().StringArrayVarP(&inputs, "input", "i", nil, "one input field as `key=value`; repeat it for more")
 	cmd.Flags().StringVar(&inputJSON, "input-json", "", "the input as a JSON `object`")
 	cmd.Flags().StringVarP(&file, "file", "f", "", "read the input, a JSON object, from this `file` (\"-\" for standard input)")

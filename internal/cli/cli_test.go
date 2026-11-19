@@ -642,7 +642,7 @@ func TestRunErrorsFromTheAPI(t *testing.T) {
 		{[]string{"--input", "board_url=https://x.example/too-many"}, exitError,
 			[]string{"(too_many_runs)", "2 of your 2 concurrent runs are going. No run was created.", "enrichednow runs list --status running"}},
 		{[]string{"--input", "board_url=https://x.example/server-error"}, exitError,
-			[]string{"Error: Something went wrong on our side.", "(internal)", "The run may have been created all the same", "enrichednow runs list"}},
+			[]string{"Error: Something went wrong on our side.", "(internal)", "The run may have been created all the same", "--idempotency-key cli-"}},
 	}
 	for _, tc := range cases {
 		before := h.api.Count("POST", "/v1/scrapers/ats.board/runs")
@@ -651,9 +651,21 @@ func TestRunErrorsFromTheAPI(t *testing.T) {
 			t.Errorf("%v: exit %d, stdout %q", tc.input, code, out)
 		}
 		contains(t, errs, tc.want...)
-		// Starting a run is never sent twice, whatever the answer.
-		if n := h.api.Count("POST", "/v1/scrapers/ats.board/runs") - before; n != 1 {
+		// Starting a run is sent again only after a server error, and then with the same idempotency key: a
+		// second attempt can never start a second run.
+		want := 1
+		if strings.Contains(strings.Join(tc.input, " "), "server-error") {
+			want = 3
+		}
+		if n := h.api.Count("POST", "/v1/scrapers/ats.board/runs") - before; n != want {
 			t.Errorf("%v: the start was sent %d times", tc.input, n)
+		}
+		keys := map[string]bool{}
+		for _, r := range h.api.Requests()[len(h.api.Requests())-want:] {
+			keys[r.IdempotencyKey] = true
+		}
+		if len(keys) != 1 || keys[""] {
+			t.Errorf("%v: every attempt should carry one key, got %v", tc.input, keys)
 		}
 	}
 	_, errs, code := h.run("run", "no.such", "--input", "x=1")

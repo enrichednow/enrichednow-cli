@@ -34,7 +34,7 @@ runs as root. To choose the version or the directory:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/enrichednow/enrichednow-cli/main/install.sh |
-  ENRICHEDNOW_VERSION=0.1.0 ENRICHEDNOW_INSTALL_DIR="$HOME/bin" sh
+  ENRICHEDNOW_VERSION=0.2.0 ENRICHEDNOW_INSTALL_DIR="$HOME/bin" sh
 ```
 
 On Windows, download `enrichednow_<version>_windows_amd64.zip` (or `arm64`) from the
@@ -61,7 +61,9 @@ go install github.com/enrichednow/enrichednow-cli/cmd/enrichednow@latest
 | `enrichednow runs get <run-id>` | One run: status, reason, what it did. |
 | `enrichednow runs wait <run-id>` | Wait until a run has ended. |
 | `enrichednow runs cancel <run-id>` | Ask a run to stop. |
-| `enrichednow runs records <run-id>` | The records a run found. |
+| `enrichednow runs records <run-id>` | The records a run found. `--format csv\|ndjson` has the API write them. |
+| `enrichednow webhooks list\|add\|show\|update\|remove\|rotate-secret` | Endpoints told when a run ends, and their signing secrets. |
+| `enrichednow webhooks run-secret\|deliveries\|resend\|verify` | The secret for one run's `--webhook-url`, what was sent, sending again, checking a signature. |
 | `enrichednow usage` | Units used over a period. `--from`, `--to`, `--group-by`, `--product`. |
 | `enrichednow data companies list\|get <domain>\|postings <domain>` | Datasets: companies. |
 | `enrichednow data postings list\|get <posting-id>` | Datasets: job postings, with filters. |
@@ -119,10 +121,15 @@ enrichednow run ats.board --input board_url=https://boards.greenhouse.io/acme -o
 | `--no-wait` | Start the run, print its id and return. Follow it with `enrichednow runs wait <id>`. |
 | `--timeout 10m` | How long to wait. When the time is up the run goes on; the command says how to follow it. |
 | `--limit N` | Print at most N records. |
+| `--format csv\|ndjson` | The records as the API writes them, instead of `--output`: a CSV has a column for each field of the scraper's record schema, in its order, so every run of a scraper has the same columns. |
+| `--idempotency-key KEY` | Name this start. Run the same command with the same key and input within 24 hours and you get the same run back, never a second one. |
+| `--webhook-url URL` | An `https` URL that is sent a signed POST when the run ends (`enrichednow webhooks run-secret` once first). |
 
-Starting a run is never retried: if the request fails without an answer, look at `enrichednow runs list` before
-running it again, or you may start — and pay for — the same work twice. Interrupting the wait with Ctrl-C does
-not stop the run; `enrichednow runs cancel <id>` does.
+The request that starts a run carries an idempotency key (yours, or one the tool makes), so after a connection
+error or a server error it is sent again without ever starting a second run. If the start still fails, the error
+gives the key: run the same command with `--idempotency-key` and that key to get the run if it was started, or to
+start it if it was not. Interrupting the wait with Ctrl-C does not stop the run; `enrichednow runs cancel <id>`
+does.
 
 ## Output
 
@@ -131,7 +138,7 @@ not stop the run; `enrichednow runs cancel <id>` does.
 | `-o, --output table` | The default: aligned columns for a person. For records, as many fields as fit the terminal. |
 | `-o json` (or `--json`) | Indented JSON. For a list command, the API's own answer (`{"runs": [...], "next_cursor": ...}`); for records, a list of them. |
 | `-o jsonl` | One JSON object a line. |
-| `-o csv` | One column a field; a nested field becomes `parent.child` columns. |
+| `-o csv` | One column a field; a nested field becomes `parent.child` columns. A text cell that a spreadsheet would run as a formula (`=`, `+`, `-`, `@`) starts with an apostrophe, as in the API's and the console's CSV. |
 | `--out FILE` | Write to a file instead. Without `--output` the format follows the extension: `.json`, `.csv`, `.txt` (table), anything else JSON lines. |
 
 JSON is the API's JSON, field for field and in the API's order — nothing is renamed or left out — so it is safe

@@ -24,7 +24,7 @@ const (
 
 // Request is one request the fake was sent.
 type Request struct {
-	Method, Path, Query, Authorization, UserAgent, Body string
+	Method, Path, Query, Authorization, UserAgent, Body, IdempotencyKey, Accept string
 }
 
 // Server is a running fake.
@@ -33,10 +33,29 @@ type Server struct {
 	// PollsUntilDone is how many times a run is read as running before it has ended. The default is 2.
 	PollsUntilDone int
 
-	mu       sync.Mutex
-	requests []Request
-	runs     map[string]*run
-	order    []string // run ids, oldest first
+	mu         sync.Mutex
+	requests   []Request
+	runs       map[string]*run
+	order      []string          // run ids, oldest first
+	keys       map[string]string // idempotency key → the run it started
+	hooks      []*hook
+	deliveries []string
+}
+
+type hook struct {
+	id, url, description string
+	events               []string
+	enabled              bool
+}
+
+func (h *hook) json(secret string) string {
+	events, _ := json.Marshal(h.events)
+	extra := ""
+	if secret != "" {
+		extra = fmt.Sprintf(`,"secret":%q`, secret)
+	}
+	return fmt.Sprintf(`{"id":%q,"url":%q,"description":%q,"events":%s,"enabled":%t,"disabled_reason":null,"disabled_at":null,`+
+		`"last_success_at":null,"last_failure_at":null,"created_at":"2026-11-19T10:00:00Z"%s}`, h.id, h.url, h.description, events, h.enabled, extra)
 }
 
 type run struct {
@@ -52,7 +71,11 @@ type run struct {
 
 // New starts a fake with a few runs already in its history.
 func New() *Server {
-	s := &Server{PollsUntilDone: 2, runs: map[string]*run{}}
+	s := &Server{PollsUntilDone: 2, runs: map[string]*run{}, keys: map[string]string{}}
+	s.deliveries = []string{
+		`{"id":"whd_2","endpoint_id":"whk_seed","run_id":"run_841742f37553189ff9c27ba1","event_id":"evt_2","event":"run.succeeded","url":"https://example.com/hook","status":"failed","attempts":8,"max_attempts":8,"next_attempt_at":null,"response_status":500,"error":"HTTP 500","duration_ms":12,"last_attempt_at":"2026-11-19T10:00:00Z","created_at":"2026-11-19T10:00:00Z","finished_at":"2026-11-19T12:00:00Z","resend_of":null}`,
+		`{"id":"whd_1","endpoint_id":"whk_seed","run_id":"run_b18944845743ccb58e932c28","event_id":"evt_1","event":"run.failed","url":"https://example.com/hook","status":"succeeded","attempts":1,"max_attempts":8,"next_attempt_at":null,"response_status":204,"error":null,"duration_ms":9,"last_attempt_at":"2026-11-19T09:00:00Z","created_at":"2026-11-19T09:00:00Z","finished_at":"2026-11-19T09:00:00Z","resend_of":null}`,
+	}
 	s.add(&run{id: "run_25d40cfbc237d0caee2fc583", scraper: "ats.board", status: "unsupported", reason: "render_required",
 		input: json.RawMessage(`{"board_url":"https://jobs.dayforcehcm.com/en-US/acme/CANDIDATEPORTAL"}`)})
 	s.add(&run{id: "run_b18944845743ccb58e932c28", scraper: "ats.board", status: "failed", reason: "adapter_failed",
@@ -188,7 +211,8 @@ func (s *Server) serve(w http.ResponseWriter, req *http.Request) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.requests = append(s.requests, Request{Method: req.Method, Path: req.URL.Path, Query: req.URL.RawQuery,
-		Authorization: req.Header.Get("Authorization"), UserAgent: req.Header.Get("User-Agent"), Body: string(body)})
+		Authorization: req.Header.Get("Authorization"), UserAgent: req.Header.Get("User-Agent"), Body: string(body),
+		IdempotencyKey: req.Header.Get("Idempotency-Key"), Accept: req.Header.Get("Accept")})
 
 	path := req.URL.Path
 	switch {
@@ -219,7 +243,14 @@ func (s *Server) serve(w http.ResponseWriter, req *http.Request) {
 	parts := strings.Split(strings.Trim(path, "/"), "/")
 	switch {
 	case req.Method == "POST" && len(parts) == 4 && parts[1] == "scrapers" && parts[3] == "runs":
-		s.start(w, parts[2], body)
+		if id, ok := s.keys[req.Header.Get("Idempotency-Key")]; ok && req.Header.Get("Idempotency-Key") != "" {
+			w.Header().Set("Idempotency-Replayed", "true")
+			write(w, 200, s.runs[id].json())
+			return
+		}
+		s.start(w, parts[2], body, req.Header.Get("Idempotency-Key"))
+	case len(parts) >= 2 && parts[1] == "webhooks":
+		s.webhooks(w, req, parts[2:], body)
 	case req.Method == "GET" && path == "/v1/runs":
 		var items []string
 		for i := len(s.order) - 1; i >= 0; i-- { // newest first
@@ -241,6 +272,10 @@ func (s *Server) serve(w http.ResponseWriter, req *http.Request) {
 			s.advance(r)
 			write(w, 200, r.json())
 		case req.Method == "GET" && len(parts) == 4 && parts[3] == "records":
+			if format := req.URL.Query().Get("format"); format == "csv" || format == "ndjson" {
+				written(w, req, format, r.records)
+				return
+			}
 			page(w, req, "records", r.records, 100, 1000)
 		case req.Method == "POST" && len(parts) == 4 && parts[3] == "cancel":
 			if r.status == "queued" {
@@ -265,15 +300,146 @@ func (s *Server) serve(w http.ResponseWriter, req *http.Request) {
 	}
 }
 
+// written answers a page of records as the API writes them: NDJSON, or CSV with the columns of ats.board's record
+// schema and the header row on every page, the cursor of the next page in X-Next-Cursor.
+func written(w http.ResponseWriter, req *http.Request, format string, records []string) {
+	limit := 100
+	if n, err := strconv.Atoi(req.URL.Query().Get("limit")); err == nil {
+		limit = n
+	}
+	offset, _ := offsetOf(req.URL.Query().Get("cursor"))
+	offset = min(offset, len(records))
+	end := min(offset+limit, len(records))
+	if end < len(records) {
+		w.Header().Set("X-Next-Cursor", cursorOf(end))
+	}
+	var out strings.Builder
+	if format == "ndjson" {
+		w.Header().Set("Content-Type", "application/x-ndjson")
+		for _, r := range records[offset:end] {
+			out.WriteString(r + "\n")
+		}
+	} else {
+		w.Header().Set("Content-Type", "text/csv; charset=utf-8")
+		out.WriteString("title,company_name,location.raw,posted_at,apply_url,page_url,fetched_at\r\n")
+		for _, r := range records[offset:end] {
+			var full map[string]any
+			_ = json.Unmarshal([]byte(r), &full)
+			loc, _ := full["location"].(map[string]any)
+			cell := func(v any) string {
+				text, _ := v.(string)
+				if strings.ContainsAny(text, "\",\r\n") {
+					return `"` + strings.ReplaceAll(text, `"`, `""`) + `"`
+				}
+				return text
+			}
+			out.WriteString(strings.Join([]string{cell(full["title"]), cell(full["company_name"]), cell(loc["raw"]), cell(full["posted_at"]),
+				cell(full["apply_url"]), cell(full["page_url"]), cell(full["fetched_at"])}, ",") + "\r\n")
+		}
+	}
+	w.WriteHeader(200)
+	io.WriteString(w, out.String())
+}
+
+func (s *Server) webhooks(w http.ResponseWriter, req *http.Request, parts []string, body []byte) {
+	find := func(id string) *hook {
+		for _, h := range s.hooks {
+			if h.id == id {
+				return h
+			}
+		}
+		return nil
+	}
+	switch {
+	case req.Method == "GET" && len(parts) == 0:
+		items := make([]string, 0, len(s.hooks))
+		for _, h := range s.hooks {
+			items = append(items, h.json(""))
+		}
+		write(w, 200, `{"endpoints":[`+strings.Join(items, ",")+`],"run_secret_set":false}`)
+	case req.Method == "POST" && len(parts) == 0:
+		var made struct {
+			URL         string   `json:"url"`
+			Events      []string `json:"events"`
+			Description string   `json:"description"`
+		}
+		if json.Unmarshal(body, &made) != nil || !strings.HasPrefix(made.URL, "https://") {
+			fail(w, 422, "invalid_input", "The request is not valid.", `{"fields":[{"path":"url","message":"The URL must be https."}]}`)
+			return
+		}
+		h := &hook{id: fmt.Sprintf("whk_%d", len(s.hooks)+1), url: made.URL, description: made.Description, events: made.Events, enabled: true}
+		s.hooks = append(s.hooks, h)
+		write(w, 201, h.json("whsec_made_"+h.id))
+	case req.Method == "POST" && len(parts) == 1 && parts[0] == "run-secret":
+		write(w, 200, `{"secret":"whsec_run_secret"}`)
+	case req.Method == "GET" && len(parts) == 1 && parts[0] == "deliveries":
+		var items []string
+		for _, d := range s.deliveries {
+			if status := req.URL.Query().Get("status"); status == "" || strings.Contains(d, `"status":"`+status+`"`) {
+				items = append(items, d)
+			}
+		}
+		page(w, req, "deliveries", items, 50, 100)
+	case req.Method == "POST" && len(parts) == 3 && parts[0] == "deliveries" && parts[2] == "resend":
+		write(w, 201, strings.Replace(strings.Replace(s.deliveries[0], `"id":"whd_2"`, `"id":"whd_3"`, 1), `"status":"failed"`, `"status":"pending"`, 1))
+	case len(parts) >= 1:
+		h := find(parts[0])
+		if h == nil {
+			fail(w, 404, "not_found", fmt.Sprintf("There is no webhook endpoint '%s'.", parts[0]), "")
+			return
+		}
+		switch {
+		case req.Method == "GET" && len(parts) == 1:
+			write(w, 200, h.json(""))
+		case req.Method == "PATCH" && len(parts) == 1:
+			var change struct {
+				URL         *string  `json:"url"`
+				Events      []string `json:"events"`
+				Description *string  `json:"description"`
+				Enabled     *bool    `json:"enabled"`
+			}
+			_ = json.Unmarshal(body, &change)
+			if change.URL != nil {
+				h.url = *change.URL
+			}
+			if change.Events != nil {
+				h.events = change.Events
+			}
+			if change.Description != nil {
+				h.description = *change.Description
+			}
+			if change.Enabled != nil {
+				h.enabled = *change.Enabled
+			}
+			write(w, 200, h.json(""))
+		case req.Method == "DELETE" && len(parts) == 1:
+			for i, other := range s.hooks {
+				if other == h {
+					s.hooks = append(s.hooks[:i], s.hooks[i+1:]...)
+					break
+				}
+			}
+			w.WriteHeader(204)
+		case req.Method == "POST" && len(parts) == 2 && parts[1] == "rotate-secret":
+			write(w, 200, h.json("whsec_rotated_"+h.id))
+		default:
+			fail(w, 404, "not_found", "There is nothing at this address.", "")
+		}
+	default:
+		fail(w, 404, "not_found", "There is nothing at this address.", "")
+	}
+}
+
 // start creates a run. What the board address contains decides how the run goes, so that a test can ask for
 // each outcome.
-func (s *Server) start(w http.ResponseWriter, scraper string, body []byte) {
+func (s *Server) start(w http.ResponseWriter, scraper string, body []byte, key string) {
 	if scraper != "ats.board" {
 		fail(w, 404, "not_found", fmt.Sprintf("There is no scraper '%s'.", scraper), "")
 		return
 	}
 	var request struct {
-		Input map[string]json.RawMessage `json:"input"`
+		Input      map[string]json.RawMessage `json:"input"`
+		WebhookURL *string                    `json:"webhook_url"`
 	}
 	if json.Unmarshal(body, &request) != nil || request.Input == nil {
 		fail(w, 422, "invalid_input", "The request is not valid.", `{"fields":[{"path":"input","message":"Field required"}]}`)
@@ -337,6 +503,9 @@ func (s *Server) start(w http.ResponseWriter, scraper string, body []byte) {
 		r.status, r.units = "ok", 1
 	}
 	s.add(r)
+	if key != "" {
+		s.keys[key] = r.id
+	}
 	status := 202
 	if r.status != "running" {
 		status = 200

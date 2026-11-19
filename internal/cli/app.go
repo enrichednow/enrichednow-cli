@@ -63,6 +63,8 @@ type App struct {
 	apiKey, apiURL          string
 	jsonOut, quiet, noColor bool
 	format, outFile         string
+	// runKey is the idempotency key the run being started was sent with.
+	runKey string
 
 	// started is set once a command's own code runs: an error before that is a mistake in the command line.
 	started bool
@@ -160,7 +162,7 @@ Documentation: ` + docsURL,
 
 	root.AddGroup(&cobra.Group{ID: "core", Title: "Scrapers and runs:"}, &cobra.Group{ID: "data", Title: "Datasets:"},
 		&cobra.Group{ID: "account", Title: "Account:"})
-	root.AddCommand(a.cmdRun(), a.cmdScrapers(), a.cmdRuns(), a.cmdData(), a.cmdUsage(), a.cmdLogin(), a.cmdLogout(), a.cmdHealth())
+	root.AddCommand(a.cmdRun(), a.cmdScrapers(), a.cmdRuns(), a.cmdWebhooks(), a.cmdData(), a.cmdUsage(), a.cmdLogin(), a.cmdLogout(), a.cmdHealth())
 	return root
 }
 

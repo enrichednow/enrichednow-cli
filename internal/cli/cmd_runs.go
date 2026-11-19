@@ -273,6 +273,7 @@ complete, and is then charged as usual. A cancelled run costs nothing; the recor
 
 func (a *App) cmdRunsRecords() *cobra.Command {
 	var limit int
+	var written string
 	cmd := &cobra.Command{
 		Use:   "records <run-id>",
 		Short: "The records a run found",
@@ -282,23 +283,34 @@ Records exist for runs that ended ok or partial, and for a cancelled run that ha
 7 days after the run ended.
 
 The table shows as many fields as fit; json, jsonl and csv have all of them. In CSV a nested field becomes
-parent.child columns.`,
+parent.child columns.
+
+--format csv or ndjson prints them as the API writes them instead, a page of 1000 at a time: a CSV has a column
+for each field of the scraper's record schema, in its order, so every run of a scraper has the same columns.`,
 		Example: `  enrichednow runs records run_841742f37553189ff9c27ba1
   enrichednow runs records run_841742f37553189ff9c27ba1 --output jsonl | jq -r .title
-  enrichednow runs records run_841742f37553189ff9c27ba1 --out jobs.csv`,
+  enrichednow runs records run_841742f37553189ff9c27ba1 --out jobs.csv
+  enrichednow runs records run_841742f37553189ff9c27ba1 --format csv --out jobs.csv`,
 		Args: exactArgs("run-id"),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if _, err := a.outputFormat(); err != nil {
+				return err
+			}
+			if err := a.checkWritten(written); err != nil {
 				return err
 			}
 			client, err := a.client(true)
 			if err != nil {
 				return err
 			}
+			if written != "" {
+				return a.writeExport(cmd.Context(), client, args[0], written)
+			}
 			return a.printRecords(cmd.Context(), client, args[0], limit)
 		},
 	}
 	cmd.Flags().IntVar(&limit, "limit", 0, "print at most this many records (0: all of them)")
+	a.addFormatFlag(cmd, &written)
 	a.addOutputFlags(cmd)
 	return cmd
 }

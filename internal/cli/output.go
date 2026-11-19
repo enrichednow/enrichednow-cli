@@ -343,7 +343,8 @@ func (a *App) emit(r result) error {
 	return nil
 }
 
-// writeCSV writes rows as CSV: one column per field, nested objects as parent.child, in the order first seen.
+// writeCSV writes rows as CSV: one column per field, nested objects as parent.child, in the order first seen. A
+// text cell that a spreadsheet would run as a formula starts with an apostrophe, as the API and the console write it.
 func writeCSV(w io.Writer, rows []json.RawMessage) error {
 	var header []string
 	seen := map[string]int{}
@@ -385,6 +386,7 @@ func writeCSV(w io.Writer, rows []json.RawMessage) error {
 		columns = append(columns, key)
 	}
 	out := csv.NewWriter(w)
+	out.UseCRLF = true // as the API and the console write CSV
 	if len(columns) > 0 {
 		if err := out.Write(columns); err != nil {
 			return err
@@ -399,6 +401,9 @@ func writeCSV(w io.Writer, rows []json.RawMessage) error {
 			}
 			if i, ok := position[key]; ok {
 				line[i] = cellText(f.Value)
+				if isJSONString(f.Value) {
+					line[i] = guardFormula(line[i])
+				}
 			}
 		}
 		if err := out.Write(line); err != nil {
