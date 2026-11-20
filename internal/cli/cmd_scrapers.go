@@ -23,14 +23,26 @@ func (a *App) cmdScrapers() *cobra.Command {
 	return cmd
 }
 
-func billing(unit string) string {
-	switch unit {
+// scraperCost is what a scraper costs, as the API says: "2 units a run", "1 unit a record".
+func scraperCost(s enrichednow.Scraper) string {
+	switch s.BillingUnit {
 	case "request":
-		return "1 unit a run"
+		return plural(s.UnitCost(), "unit", "units") + " a run"
 	case "record":
-		return "1 unit a record"
+		return plural(s.UnitCost(), "unit", "units") + " a record"
 	}
-	return unit
+	return s.BillingUnit
+}
+
+// runRate is the rate a run was started at, "2 units a run" or "3 units a record"; empty when the API did not say.
+func runRate(run *enrichednow.Run) string {
+	switch {
+	case run.UnitsPerRequest != nil:
+		return plural(*run.UnitsPerRequest, "unit", "units") + " a run"
+	case run.UnitsPerRecord != nil:
+		return plural(*run.UnitsPerRecord, "unit", "units") + " a record"
+	}
+	return ""
 }
 
 func (a *App) cmdScrapersList() *cobra.Command {
@@ -40,8 +52,8 @@ func (a *App) cmdScrapersList() *cobra.Command {
 		Short:   "Every scraper, with what a run of it costs",
 		Long: `List the catalogue. No API key is needed.
 
-A run is charged only when it ends ok or partial: 1 unit for the run, or 1 unit for each record, depending on
-the scraper.`,
+A run is charged only when it ends ok or partial: the scraper's units for the run, or for each record, as the
+CHARGED column says.`,
 		Example: `  enrichednow scrapers list
   enrichednow scrapers list --json | jq -r '.scrapers[].id'`,
 		Args: exactArgs(),
@@ -61,7 +73,7 @@ the scraper.`,
 			return a.emit(result{doc: doc, rows: listOf(doc, "scrapers"), noun: "scrapers", human: func(w io.Writer, st *style, width int) {
 				t := &table{head: []string{"ID", "TITLE", "CHARGED", "SUMMARY"}, paint: map[int]func(string) string{0: st.bold}}
 				for _, s := range scrapers {
-					t.rows = append(t.rows, []string{s.ID, s.Title, billing(s.BillingUnit), s.Summary})
+					t.rows = append(t.rows, []string{s.ID, s.Title, scraperCost(s), s.Summary})
 				}
 				if width <= 0 {
 					width = defaultWidth
@@ -104,7 +116,7 @@ With --json the answer is the API's: the scraper with the JSON Schema of its inp
 				fmt.Fprintf(w, "%s  %s\n%s\n\n", st.bold(s.ID), s.Title, s.Summary)
 				pairs(w, st, [][2]string{
 					{"Version", fmt.Sprint(s.Version)},
-					{"Charged", billing(s.BillingUnit) + ", when the run ends ok or partial"},
+					{"Charged", scraperCost(s.Scraper) + ", when the run ends ok or partial"},
 					{"Mode", s.Mode},
 				})
 

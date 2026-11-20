@@ -58,6 +58,9 @@ func (h *hook) json(secret string) string {
 		`"last_success_at":null,"last_failure_at":null,"created_at":"2026-11-19T10:00:00Z"%s}`, h.id, h.url, h.description, events, h.enabled, extra)
 }
 
+// atsBoardUnits is what a run of ats.board costs.
+const atsBoardUnits = 2
+
 type run struct {
 	id, scraper, status, reason string
 	input                       json.RawMessage
@@ -80,7 +83,7 @@ func New() *Server {
 		input: json.RawMessage(`{"board_url":"https://jobs.dayforcehcm.com/en-US/acme/CANDIDATEPORTAL"}`)})
 	s.add(&run{id: "run_b18944845743ccb58e932c28", scraper: "ats.board", status: "failed", reason: "adapter_failed",
 		input: json.RawMessage(`{"board_url":"https://boards.greenhouse.io/acme-board-that-does-not-exist"}`)})
-	s.add(&run{id: "run_841742f37553189ff9c27ba1", scraper: "ats.board", status: "ok", units: 1, records: jobRecords,
+	s.add(&run{id: "run_841742f37553189ff9c27ba1", scraper: "ats.board", status: "ok", units: atsBoardUnits, records: jobRecords,
 		input: json.RawMessage(`{"board_url":"https://boards.greenhouse.io/acme"}`)})
 	s.Server = httptest.NewServer(http.HandlerFunc(s.serve))
 	return s
@@ -115,11 +118,11 @@ var jobRecords = []string{
 	`{"title":"Account Executive, Mid-Market","company_name":"Acme","company_domain":null,"location":{"raw":"London, England","city":"London","region":"England","country":null,"remote":false},"employment_type":null,"posted_at":null,"valid_through":null,"salary":null,"description":null,"apply_url":"https://boards.greenhouse.io/acme/jobs/4567892","page_url":"https://boards.greenhouse.io/acme/jobs/4567892","ats":"greenhouse","external_id":"4567892","fetched_at":"2026-11-17T09:30:02Z"}`,
 }
 
-const scrapers = `[{"id":"ats.board","version":1,"title":"ATS job board","summary":"Job openings from one board of an applicant tracking system (Greenhouse, Lever, Ashby, Workday and others).","mode":"job","billing_unit":"request","data_class":"public","availability":"public"},` +
+const scrapers = `[{"id":"ats.board","version":1,"title":"ATS job board","summary":"Job openings from one board of an applicant tracking system (Greenhouse, Lever, Ashby, Workday and others).","mode":"job","billing_unit":"request","units_per_request":2,"units_per_record":null,"data_class":"public","availability":"public"},` +
 	`{"id":"careers.company","version":1,"title":"Company careers site","summary":"Job openings from a company's own careers site: give its domain or its careers page.","mode":"job","billing_unit":"request","data_class":"public","availability":"public"},` +
-	`{"id":"linkedin.jobs_search","version":1,"title":"LinkedIn job search","summary":"Job postings that match a search on LinkedIn.","mode":"job","billing_unit":"record","data_class":"public","availability":"public"}]`
+	`{"id":"linkedin.jobs_search","version":1,"title":"LinkedIn job search","summary":"Job postings that match a search on LinkedIn.","mode":"job","billing_unit":"record","units_per_request":null,"units_per_record":3,"data_class":"public","availability":"public"}]`
 
-const atsBoard = `{"id":"ats.board","version":1,"title":"ATS job board","summary":"Job openings from one board of an applicant tracking system (Greenhouse, Lever, Ashby, Workday and others).","mode":"job","billing_unit":"request","data_class":"public","availability":"public",` +
+const atsBoard = `{"id":"ats.board","version":1,"title":"ATS job board","summary":"Job openings from one board of an applicant tracking system (Greenhouse, Lever, Ashby, Workday and others).","mode":"job","billing_unit":"request","units_per_request":2,"units_per_record":null,"data_class":"public","availability":"public",` +
 	`"input_schema":{"additionalProperties":false,"properties":{"board_url":{"description":"The board's address, e.g. https://boards.greenhouse.io/acme.","maxLength":2000,"title":"Board Url","type":"string"},"company_name":{"anyOf":[{"maxLength":200,"type":"string"},{"type":"null"}],"default":null,"description":"The employer's name, when the board does not give it.","title":"Company Name"},"max_detail_pages":{"default":30,"description":"Posting pages read for details, at most.","maximum":200,"minimum":0,"title":"Max Detail Pages","type":"integer"}},"required":["board_url"],"title":"AtsBoardInput","type":"object"},` +
 	`"record_schema":{"$defs":{"JobLocation":{"properties":{"raw":{"anyOf":[{"type":"string"},{"type":"null"}]}},"type":"object"}},"properties":{"title":{"title":"Title","type":"string"},"company_name":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Company Name"},"location":{"anyOf":[{"$ref":"#/$defs/JobLocation"},{"type":"null"}],"default":null},"posted_at":{"anyOf":[{"format":"date","type":"string"},{"type":"null"}],"default":null,"title":"Posted At"},"apply_url":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Apply Url"},"page_url":{"title":"Page Url","type":"string"},"fetched_at":{"format":"date-time","title":"Fetched At","type":"string"}},"required":["title","page_url","fetched_at"],"title":"CareersJobPosting","type":"object"}}`
 
@@ -148,8 +151,8 @@ func (r *run) json() string {
 		finished = `"2026-11-16T22:37:51.066313Z"`
 		diagnostics = `{"requests":1,"bytes":259214,"wall_ms":885,"facts":{"careers_url":"https://boards.greenhouse.io/acme","ats":"greenhouse","pages_read":1}}`
 	}
-	return fmt.Sprintf(`{"id":%q,"scraper_id":%q,"scraper_version":1,"status":%q,"reason":%s,"input":%s,"record_count":%d,"units":%d,"diagnostics":%s,"created_at":"2026-11-16T22:37:50.170950Z","started_at":%s,"finished_at":%s}`,
-		r.id, r.scraper, r.status, reason, r.input, len(r.records), r.units, diagnostics, started, finished)
+	return fmt.Sprintf(`{"id":%q,"scraper_id":%q,"scraper_version":1,"status":%q,"reason":%s,"input":%s,"record_count":%d,"units":%d,"units_per_request":%d,"units_per_record":null,"diagnostics":%s,"created_at":"2026-11-16T22:37:50.170950Z","started_at":%s,"finished_at":%s}`,
+		r.id, r.scraper, r.status, reason, r.input, len(r.records), r.units, atsBoardUnits, diagnostics, started, finished)
 }
 
 func fail(w http.ResponseWriter, status int, code, message, details string) {
@@ -477,7 +480,7 @@ func (s *Server) start(w http.ResponseWriter, scraper string, body []byte, key s
 	}
 	switch {
 	case strings.Contains(board, "no-allowance"):
-		fail(w, 402, "quota_exceeded", "This month's units are used up.", `{"used_units":1000,"allowance_units":1000}`)
+		fail(w, 402, "quota_exceeded", "This month's units are used up.", `{"used_units":1000,"allowance_units":1000,"topup_units":0,"units_needed":2}`)
 		return
 	case strings.Contains(board, "too-many"):
 		fail(w, 429, "too_many_runs", "The account already has as many runs in progress as it may; wait for one to end.", `{"active_runs":2,"max_concurrent_runs":2}`)
@@ -496,11 +499,11 @@ func (s *Server) start(w http.ResponseWriter, scraper string, body []byte, key s
 	case strings.Contains(board, "partial"):
 		r.ends, r.endReason = "partial", "render_required"
 	case strings.Contains(board, "instant"):
-		r.status, r.records, r.units = "ok", jobRecords, 1
+		r.status, r.records, r.units = "ok", jobRecords, atsBoardUnits
 	case strings.Contains(board, "never-ends"):
 		r.ends = ""
 	case strings.Contains(board, "empty"):
-		r.status, r.units = "ok", 1
+		r.status, r.units = "ok", atsBoardUnits
 	}
 	s.add(r)
 	if key != "" {
@@ -526,7 +529,7 @@ func (s *Server) advance(r *run) {
 	if r.ends == "" || r.polls < s.PollsUntilDone {
 		return
 	}
-	r.status, r.reason, r.units = r.ends, r.endReason, 1
+	r.status, r.reason, r.units = r.ends, r.endReason, atsBoardUnits
 	r.records = jobRecords
 	if r.ends == "partial" {
 		r.records = jobRecords[:2]

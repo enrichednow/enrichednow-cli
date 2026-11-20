@@ -254,7 +254,11 @@ func (a *App) summary(run *enrichednow.Run) error {
 	if !run.Status.IsSuccess() {
 		return runFailed(run)
 	}
-	parts := []string{plural(run.RecordCount, "record", "records"), plural(run.Units, "unit", "units")}
+	charged := plural(run.Units, "unit", "units")
+	if run.UnitsPerRecord != nil {
+		charged += " (" + runRate(run) + ")"
+	}
+	parts := []string{plural(run.RecordCount, "record", "records"), charged}
 	if d := runDuration(run); d > 0 {
 		parts = append(parts, fmtDuration(d))
 	}

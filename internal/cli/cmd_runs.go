@@ -170,10 +170,15 @@ func printRun(w io.Writer, st *style, run *enrichednow.Run) {
 		{"Reason", dash(run.Reason)},
 		{"Records", strconv.Itoa(run.RecordCount)},
 		{"Units", strconv.Itoa(run.Units)},
+	}
+	if rate := runRate(run); rate != "" {
+		items = append(items, [2]string{"Rate", rate})
+	}
+	items = append(items, [][2]string{
 		{"Created", fmtTime(run.CreatedAt) + " UTC"},
 		{"Started", when(run.StartedAt)},
 		{"Finished", when(run.FinishedAt)},
-	}
+	}...)
 	if d := runDuration(run); d > 0 {
 		items = append(items, [2]string{"Took", fmtDuration(d)})
 	}

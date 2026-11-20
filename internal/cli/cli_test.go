@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/enrichednow/enrichednow-cli/internal/fakeapi"
+	enrichednow "github.com/enrichednow/enrichednow-go"
 	"github.com/spf13/cobra"
 )
 
@@ -340,7 +341,11 @@ func TestScrapersList(t *testing.T) {
 	if len(lines) != 4 || !strings.HasPrefix(lines[0], "ID ") {
 		t.Fatalf("want a heading and three rows, got:\n%s", out)
 	}
-	contains(t, out, "TITLE", "CHARGED", "ats.board", "1 unit a run", "linkedin.jobs_search", "1 unit a record")
+	contains(t, out, "TITLE", "CHARGED", "ats.board", "2 units a run", "linkedin.jobs_search", "3 units a record")
+	// A scraper the API gives no cost for (an API from before costs differed) costs 1.
+	if line := lines[2]; !strings.HasPrefix(line, "careers.company") || !strings.Contains(line, "1 unit a run") {
+		t.Errorf("careers.company: %q", line)
+	}
 	// The columns line up.
 	if strings.Index(lines[0], "TITLE") != strings.Index(lines[1], "ATS job board") {
 		t.Errorf("the columns are not aligned:\n%s", out)
@@ -362,7 +367,7 @@ func TestScrapersList(t *testing.T) {
 func TestScrapersShow(t *testing.T) {
 	h := newHarness(t)
 	out, _ := h.ok("scrapers", "show", "ats.board")
-	contains(t, out, "ats.board  ATS job board", "1 unit a run, when the run ends ok or partial",
+	contains(t, out, "ats.board  ATS job board", "2 units a run, when the run ends ok or partial",
 		"INPUT", "FIELD", "REQUIRED", "DEFAULT", "RECORD FIELDS", "enrichednow run ats.board --input board_url=<board_url>")
 	for _, want := range [][]string{
 		{"board_url", "string", "required", "The board's address", "(at most 2000 characters)"},
@@ -413,7 +418,7 @@ func TestRunWaitsAndPrintsTheRecords(t *testing.T) {
 	out, errs := h.ok("run", "ats.board", "--input", acme, "--input", "max_detail_pages=10", "--input", "company_name=007")
 	contains(t, out, "TITLE", "Senior Software Engineer", "Product Designer", "Account Executive, Mid-Market", "COMPANY_NAME", "Acme")
 	lacks(t, out, "COMPANY_DOMAIN", "VALID_THROUGH") // no record has a value for these
-	contains(t, errs, "running …", "ended ok: 3 records, 1 unit, 885ms.")
+	contains(t, errs, "running …", "ended ok: 3 records, 2 units, 885ms.")
 
 	start := lastRequest(t, h, "POST", "/v1/scrapers/ats.board/runs")
 	if start.Query != "wait=5" {
@@ -591,7 +596,7 @@ func TestRunPartialSucceedsWithAWarning(t *testing.T) {
 	if strings.Count(out, "\n") != 2 {
 		t.Errorf("records:\n%s", out)
 	}
-	contains(t, errs, "ended partial (reason: render_required): 2 records, 1 unit", "Partial: some of the target could not be read.")
+	contains(t, errs, "ended partial (reason: render_required): 2 records, 2 units", "Partial: some of the target could not be read.")
 }
 
 func TestRunWithNoRecords(t *testing.T) {
@@ -600,7 +605,7 @@ func TestRunWithNoRecords(t *testing.T) {
 	if out != "" {
 		t.Errorf("stdout = %q", out)
 	}
-	contains(t, errs, "ended ok: 0 records, 1 unit", "No records.")
+	contains(t, errs, "ended ok: 0 records, 2 units", "No records.")
 	out, _ = h.ok("run", "ats.board", "--input", "board_url=https://boards.greenhouse.io/empty", "--json")
 	if strings.TrimSpace(out) != "[]" {
 		t.Errorf("--json with no records should be an empty list, got %q", out)
@@ -638,7 +643,7 @@ func TestRunErrorsFromTheAPI(t *testing.T) {
 			[]string{"Error: The input is not valid.", "(invalid_input)", "input.board_url: Field required", "input.board: Extra inputs are not permitted",
 				"input.max_detail_pages: Input should be less than or equal to 200", "enrichednow scrapers show ats.board", "No run was created"}},
 		{[]string{"--input", "board_url=https://x.example/no-allowance"}, exitError,
-			[]string{"Error: This month's units are used up.", "(quota_exceeded)", "Used 1000 of 1000 units this month.", "enrichednow usage"}},
+			[]string{"Error: This month's units are used up.", "(quota_exceeded)", "Used 1000 of 1000 units this month.", "This run needs 2 units; 0 top-up units are left.", "enrichednow usage"}},
 		{[]string{"--input", "board_url=https://x.example/too-many"}, exitError,
 			[]string{"(too_many_runs)", "2 of your 2 concurrent runs are going. No run was created.", "enrichednow runs list --status running"}},
 		{[]string{"--input", "board_url=https://x.example/server-error"}, exitError,
@@ -770,7 +775,7 @@ func TestRunsList(t *testing.T) {
 func TestRunsGet(t *testing.T) {
 	h := newHarness(t)
 	out, _ := h.ok("runs", "get", "run_841742f37553189ff9c27ba1")
-	contains(t, out, "Run       run_841742f37553189ff9c27ba1", "Scraper   ats.board (version 1)", "Status    ok", "Records   3", "Units     1",
+	contains(t, out, "Run       run_841742f37553189ff9c27ba1", "Scraper   ats.board (version 1)", "Status    ok", "Records   3", "Units     2", "Rate      2 units a run",
 		"Created   2026-11-16 22:37:50 UTC", "Took      885ms", `Input     {"board_url":"https://boards.greenhouse.io/acme"}`, "Requests  1", "ats", "greenhouse")
 	out, _ = h.ok("runs", "get", "run_b18944845743ccb58e932c28")
 	contains(t, out, "Status    failed", "Reason    adapter_failed")
@@ -1104,6 +1109,26 @@ func TestMaskKey(t *testing.T) {
 	for _, short := range []string{"en_live_short", "something else entirely", ""} {
 		if got := maskKey(short); got != "en_live_…" {
 			t.Errorf("maskKey(%q) = %q: a short or odd key must not be shown at all", short, got)
+		}
+	}
+}
+
+func TestCostsAreTheAPIs(t *testing.T) {
+	two, three := 2, 3
+	cases := []struct {
+		got, want string
+	}{
+		{scraperCost(enrichednow.Scraper{BillingUnit: "request", UnitsPerRequest: &two}), "2 units a run"},
+		{scraperCost(enrichednow.Scraper{BillingUnit: "record", UnitsPerRecord: &three}), "3 units a record"},
+		{scraperCost(enrichednow.Scraper{BillingUnit: "record"}), "1 unit a record"},
+		{scraperCost(enrichednow.Scraper{BillingUnit: "something new"}), "something new"},
+		{runRate(&enrichednow.Run{UnitsPerRequest: &two}), "2 units a run"},
+		{runRate(&enrichednow.Run{UnitsPerRecord: &three}), "3 units a record"},
+		{runRate(&enrichednow.Run{}), ""},
+	}
+	for i, c := range cases {
+		if c.got != c.want {
+			t.Errorf("%d: %q, want %q", i, c.got, c.want)
 		}
 	}
 }

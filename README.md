@@ -34,7 +34,7 @@ runs as root. To choose the version or the directory:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/enrichednow/enrichednow-cli/main/install.sh |
-  ENRICHEDNOW_VERSION=0.2.0 ENRICHEDNOW_INSTALL_DIR="$HOME/bin" sh
+  ENRICHEDNOW_VERSION=0.3.0 ENRICHEDNOW_INSTALL_DIR="$HOME/bin" sh
 ```
 
 On Windows, download `enrichednow_<version>_windows_amd64.zip` (or `arm64`) from the
@@ -212,7 +212,7 @@ version of it in `go.mod`.
 A release is cut by pushing a tag:
 
 ```bash
-git tag v0.2.0 && git push origin v0.2.0
+git tag v0.3.0 && git push origin v0.3.0
 ```
 
 `.github/workflows/release.yml` then runs [GoReleaser](https://goreleaser.com) with `.goreleaser.yaml`: it runs
@@ -220,8 +220,8 @@ the tests, builds the Linux, macOS and Windows binaries for amd64 and arm64, arc
 `checksums.txt`, and creates a **draft** release. Look the files over and publish it:
 
 ```bash
-gh release view v0.2.0
-gh release edit v0.2.0 --draft=false
+gh release view v0.3.0
+gh release edit v0.3.0 --draft=false
 ```
 
 `install.sh` installs a release once it is published. To try the build without releasing:

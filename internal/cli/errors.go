@@ -151,6 +151,9 @@ func apiFailure(api *enrichednow.APIError) *cliError {
 		}
 	case errors.Is(api, enrichednow.ErrQuotaExceeded):
 		e.lines = append(e.lines, fmt.Sprintf("Used %s of %s units this month.", number("used_units"), number("allowance_units")))
+		if _, ok := api.Details["units_needed"]; ok {
+			e.lines = append(e.lines, fmt.Sprintf("This run needs %s units; %s top-up units are left.", number("units_needed"), number("topup_units")))
+		}
 		e.hint = "The allowance renews with the calendar month (UTC). See `enrichednow usage`."
 	case errors.Is(api, enrichednow.ErrTooManyRuns):
 		e.lines = append(e.lines, fmt.Sprintf("%s of your %s concurrent runs are going. No run was created.", number("active_runs"), number("max_concurrent_runs")))

@@ -122,7 +122,7 @@ func TestBinary(t *testing.T) {
 	}
 
 	out, errs = s.expect(0, "", "run", "ats.board", "--input", "board_url=https://boards.greenhouse.io/acme")
-	if !strings.Contains(out, "Senior Software Engineer") || !strings.Contains(errs, "ended ok: 3 records, 1 unit") {
+	if !strings.Contains(out, "Senior Software Engineer") || !strings.Contains(errs, "ended ok: 3 records, 2 units") {
 		t.Errorf("run:\nstdout: %s\nstderr: %s", out, errs)
 	}
 
