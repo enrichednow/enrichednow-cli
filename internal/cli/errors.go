@@ -149,6 +149,13 @@ func apiFailure(api *enrichednow.APIError) *cliError {
 			id := strings.TrimSuffix(strings.TrimPrefix(api.Path, "/v1/scrapers/"), "/runs")
 			e.hint = fmt.Sprintf("See what it takes with `enrichednow scrapers show %s`. No run was created.", id)
 		}
+	case errors.Is(api, enrichednow.ErrLimitReached): // a limit of the account's own, or of the key: not the plan
+		whose, hint := "The account's monthly spend limit", "An owner, an admin or a billing user can raise or remove it in the console, on the Usage page."
+		if api.Details["scope"] == "key" {
+			whose, hint = "This API key's monthly limit", "Raise or remove the key's limit in the console, under API keys, or use another key."
+		}
+		e.lines = append(e.lines, fmt.Sprintf("%s: %s of %s units used this month; this run needs %s.", whose, number("used_units"), number("limit_units"), number("units_needed")))
+		e.hint = hint
 	case errors.Is(api, enrichednow.ErrQuotaExceeded):
 		e.lines = append(e.lines, fmt.Sprintf("Used %s of %s units this month.", number("used_units"), number("allowance_units")))
 		if _, ok := api.Details["units_needed"]; ok {

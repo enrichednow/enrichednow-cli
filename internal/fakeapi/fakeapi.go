@@ -482,6 +482,13 @@ func (s *Server) start(w http.ResponseWriter, scraper string, body []byte, key s
 	case strings.Contains(board, "no-allowance"):
 		fail(w, 402, "quota_exceeded", "This month's units are used up.", `{"used_units":1000,"allowance_units":1000,"topup_units":0,"units_needed":2}`)
 		return
+	case strings.Contains(board, "key-limit"):
+		fail(w, 402, "limit_reached", "This API key's monthly limit of 100 units is reached: its runs used 100 this month, and a run of this scraper costs 2 units.",
+			`{"scope":"key","key_id":"key_1","limit_units":100,"used_units":100,"units_needed":2}`)
+		return
+	case strings.Contains(board, "spend-limit"):
+		fail(w, 402, "limit_reached", "The account's monthly spend limit of 500 units is reached.", `{"scope":"account","limit_units":500,"used_units":499,"units_needed":2}`)
+		return
 	case strings.Contains(board, "too-many"):
 		fail(w, 429, "too_many_runs", "The account already has as many runs in progress as it may; wait for one to end.", `{"active_runs":2,"max_concurrent_runs":2}`)
 		return

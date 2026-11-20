@@ -7,7 +7,7 @@
 # binary in a directory on the PATH. Nothing is run as root unless you ask for a directory that needs it.
 #
 # Environment:
-#   ENRICHEDNOW_VERSION       the version to install, e.g. 0.3.0 (default: the latest release)
+#   ENRICHEDNOW_VERSION       the version to install, e.g. 0.3.1 (default: the latest release)
 #   ENRICHEDNOW_INSTALL_DIR   where to put the binary (default: /usr/local/bin if writable, else ~/.local/bin)
 #   ENRICHEDNOW_REPO          the GitHub repository the releases are in (default: enrichednow/enrichednow-cli)
 #   ENRICHEDNOW_DOWNLOAD_BASE where the release files are, instead of GitHub (with it, ENRICHEDNOW_VERSION is needed)
