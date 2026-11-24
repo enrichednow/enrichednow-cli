@@ -53,6 +53,9 @@ func schemaFields(raw json.RawMessage) []schemaField {
 			f.Default = string(mustJSON(def))
 		}
 		description, _ := node["description"].(string)
+		if description == "" { // a formula's parameter says what it is in x-help, for the setup form
+			description, _ = node["x-help"].(string)
+		}
 		f.Description = strings.TrimSpace(oneLine(description) + " " + schemaLimits(node))
 		out = append(out, f)
 	}
@@ -171,8 +174,17 @@ func schemaLimits(node map[string]any) string {
 	if n, ok := find("maxLength"); ok {
 		parts = append(parts, "at most "+num(n)+" characters")
 	}
-	if n, ok := find("maxItems"); ok {
-		parts = append(parts, "at most "+num(n)+" items")
+	fewest, hasFewest := find("minItems")
+	most, hasMost := find("maxItems")
+	switch {
+	case hasFewest && hasMost:
+		parts = append(parts, num(fewest)+" to "+num(most)+" items")
+	case hasMost:
+		parts = append(parts, "at most "+num(most)+" items")
+	case hasFewest && fewest == 1:
+		parts = append(parts, "at least 1 item")
+	case hasFewest && fewest > 1:
+		parts = append(parts, "at least "+num(fewest)+" items")
 	}
 	if len(parts) == 0 {
 		return ""

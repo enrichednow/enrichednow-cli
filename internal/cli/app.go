@@ -111,7 +111,7 @@ func (a *App) styles() {
 func (a *App) rootCommand() *cobra.Command {
 	root := &cobra.Command{
 		Use:   "enrichednow",
-		Short: "Run scrapers and read datasets from the command line",
+		Short: "Run scrapers and formulas, and read datasets, from the command line",
 		Long: `enrichednow is the command-line tool for the EnrichedNow API.
 
 Start with a key from the console (API keys):
@@ -119,6 +119,7 @@ Start with a key from the console (API keys):
   enrichednow login
   enrichednow scrapers list
   enrichednow run ats.board --input board_url=https://boards.greenhouse.io/acme
+  enrichednow formulas list
 
 The key is read from --api-key, then ` + envAPIKey + `, then what "enrichednow login" saved.
 
@@ -160,9 +161,10 @@ Documentation: ` + docsURL,
 	flags.BoolVarP(&a.quiet, "quiet", "q", false, "no progress and no hints on standard error; errors are still printed")
 	flags.BoolVar(&a.noColor, "no-color", false, "no colours (also off when NO_COLOR is set or the output is not a terminal)")
 
-	root.AddGroup(&cobra.Group{ID: "core", Title: "Scrapers and runs:"}, &cobra.Group{ID: "data", Title: "Datasets:"},
-		&cobra.Group{ID: "account", Title: "Account:"})
-	root.AddCommand(a.cmdRun(), a.cmdScrapers(), a.cmdRuns(), a.cmdWebhooks(), a.cmdData(), a.cmdUsage(), a.cmdLogin(), a.cmdLogout(), a.cmdHealth())
+	root.AddGroup(&cobra.Group{ID: "core", Title: "Scrapers and runs:"}, &cobra.Group{ID: "formulas", Title: "Formulas:"},
+		&cobra.Group{ID: "data", Title: "Datasets:"}, &cobra.Group{ID: "account", Title: "Account:"})
+	root.AddCommand(a.cmdRun(), a.cmdScrapers(), a.cmdRuns(), a.cmdWebhooks(), a.cmdFormulas(), a.cmdSaved(), a.cmdData(), a.cmdUsage(),
+		a.cmdLogin(), a.cmdLogout(), a.cmdHealth())
 	return root
 }
 

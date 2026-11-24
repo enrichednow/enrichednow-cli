@@ -3,7 +3,7 @@ module github.com/enrichednow/enrichednow-cli
 go 1.26.0
 
 require (
-	github.com/enrichednow/enrichednow-go v0.3.1
+	github.com/enrichednow/enrichednow-go v0.4.0
 	github.com/spf13/cobra v1.10.2
 	golang.org/x/term v0.48.0
 )

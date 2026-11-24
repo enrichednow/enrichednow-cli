@@ -1,5 +1,6 @@
 // Package fakeapi is a stand-in for the EnrichedNow API, for the tests of the command-line tool. It answers the
-// documented endpoints with the documented shapes and keeps runs in memory; it scrapes nothing.
+// documented endpoints with the documented shapes and keeps runs in memory; it scrapes nothing. The formula routes
+// answer with exchanges recorded from the real API (formulas.go).
 package fakeapi
 
 import (
@@ -32,14 +33,20 @@ type Server struct {
 	*httptest.Server
 	// PollsUntilDone is how many times a run is read as running before it has ended. The default is 2.
 	PollsUntilDone int
+	// NeedsAttestation makes starting a run of job-order-hunter, or scheduling it, fail as it does before an owner
+	// or an admin accepted its terms.
+	NeedsAttestation bool
 
-	mu         sync.Mutex
-	requests   []Request
-	runs       map[string]*run
-	order      []string          // run ids, oldest first
-	keys       map[string]string // idempotency key → the run it started
-	hooks      []*hook
-	deliveries []string
+	mu          sync.Mutex
+	requests    []Request
+	runs        map[string]*run
+	order       []string          // run ids, oldest first
+	keys        map[string]string // idempotency key → the run it started
+	hooks       []*hook
+	deliveries  []string
+	exchanges   map[string]exchange    // the recorded answers of the formula routes, by name
+	formulaRuns map[string]*formulaRun // by id
+	formulaKeys map[string]string      // idempotency key → the formula run it started
 }
 
 type hook struct {
@@ -85,6 +92,7 @@ func New() *Server {
 		input: json.RawMessage(`{"board_url":"https://boards.greenhouse.io/acme-board-that-does-not-exist"}`)})
 	s.add(&run{id: "run_841742f37553189ff9c27ba1", scraper: "ats.board", status: "ok", units: atsBoardUnits, records: jobRecords,
 		input: json.RawMessage(`{"board_url":"https://boards.greenhouse.io/acme"}`)})
+	s.initFormulas()
 	s.Server = httptest.NewServer(http.HandlerFunc(s.serve))
 	return s
 }
@@ -218,6 +226,9 @@ func (s *Server) serve(w http.ResponseWriter, req *http.Request) {
 		IdempotencyKey: req.Header.Get("Idempotency-Key"), Accept: req.Header.Get("Accept")})
 
 	path := req.URL.Path
+	if s.publicFormulas(w, req, strings.Split(strings.Trim(path, "/"), "/")) {
+		return
+	}
 	switch {
 	case req.Method == "GET" && path == "/v1/health":
 		write(w, 200, `{"status":"ok"}`)
@@ -244,6 +255,9 @@ func (s *Server) serve(w http.ResponseWriter, req *http.Request) {
 	}
 
 	parts := strings.Split(strings.Trim(path, "/"), "/")
+	if s.formulas(w, req, parts, body) {
+		return
+	}
 	switch {
 	case req.Method == "POST" && len(parts) == 4 && parts[1] == "scrapers" && parts[3] == "runs":
 		if id, ok := s.keys[req.Header.Get("Idempotency-Key")]; ok && req.Header.Get("Idempotency-Key") != "" {

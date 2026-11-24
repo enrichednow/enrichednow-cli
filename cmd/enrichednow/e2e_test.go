@@ -180,6 +180,31 @@ func TestBinary(t *testing.T) {
 	}
 	s.expect(0, "", "data", "companies", "get", "figma.com")
 
+	// Formulas: what one takes, a preview, then a saved formula and what it delivered.
+	out, _ = s.expect(0, "", "formulas", "get", "job-order-hunter")
+	if !strings.Contains(out, "job_titles") || !strings.Contains(out, "required") {
+		t.Errorf("formulas get:\n%s", out)
+	}
+	out, errs = s.expect(0, "", "formulas", "run", "job-order-hunter", "--param", "job_titles=Java Developer", "--param", "locations=London", "--preview", "-o", "jsonl")
+	if strings.Count(out, "\n") != 4 || !strings.Contains(errs, "ended partial") {
+		t.Errorf("formulas run:\nstdout: %s\nstderr: %s", out, errs)
+	}
+	leads := filepath.Join(dir, "leads.csv")
+	s.expect(0, "", "formulas", "rows", "frun_000000000000000000000003", "--out", leads)
+	if data, err := os.ReadFile(leads); err != nil || strings.Count(string(data), "company_name,") != 1 {
+		t.Errorf("formulas rows --out: %v\n%s", err, data)
+	}
+	out, _ = s.expect(0, "", "saved", "create", "job-order-hunter", "--param", "job_titles=Java Developer", "--param", "locations=London",
+		"--schedule", "weekdays@07:30", "--timezone", "Europe/London")
+	if !strings.Contains(out, "weekdays at 07:30 Europe/London") {
+		t.Errorf("saved create:\n%s", out)
+	}
+	s.expect(0, "", "saved", "rows", "sf_000000000000000000000002", "--since", "24h")
+	_, errs = s.expect(1, "", "saved", "create", "job-order-hunter", "--params-json", `{"job_titles": ["Nurse"], "locations": ["Texas"]}`, "--schedule", "hourly@00:15")
+	if !strings.Contains(errs, "plan_limit_reached") {
+		t.Errorf("a schedule the plan does not allow: %s", errs)
+	}
+
 	s.mute = true // a completion script is long, and of no interest in the session
 	out, _ = s.expect(0, "", "completion", "bash")
 	if !strings.Contains(out, "enrichednow") {

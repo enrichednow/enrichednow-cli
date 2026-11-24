@@ -54,6 +54,26 @@ func runFailed(run *enrichednow.Run) *cliError {
 	return e
 }
 
+// formulaRunFailed is a formula run that ended failed, unsupported or cancelled.
+func formulaRunFailed(run *enrichednow.FormulaRun) *cliError {
+	e := &cliError{code: "run_" + string(run.Status), exit: exitRunFailed, details: map[string]any{"run": json.RawMessage(run.RawJSON())}}
+	e.msg = fmt.Sprintf("formula run %s ended %s", run.ID, run.Status)
+	if run.Reason != "" {
+		e.msg += fmt.Sprintf(" (reason: %s)", run.Reason)
+	}
+	if run.RowsTotal > 0 {
+		e.lines = append(e.lines, fmt.Sprintf("The %s it wrote are kept: enrichednow formulas rows %s", plural(run.RowsTotal, "row", "rows"), run.ID))
+	} else {
+		e.lines = append(e.lines, "No rows.")
+	}
+	e.lines = append(e.lines, reasonLines(run)...)
+	if run.UnitsSpent > 0 {
+		e.lines = append(e.lines, fmt.Sprintf("%s spent on what it did.", plural(run.UnitsSpent, "unit was", "units were")))
+	}
+	e.hint = fmt.Sprintf("See what it needs with `enrichednow formulas get %s`, and try a --preview.", run.FormulaID)
+	return e
+}
+
 // classify turns any error into a cliError.
 func (a *App) classify(err error) *cliError {
 	var own *cliError
@@ -71,6 +91,10 @@ func (a *App) classify(err error) *cliError {
 	var failed *enrichednow.RunFailedError
 	if errors.As(err, &failed) {
 		return runFailed(failed.Run)
+	}
+	var formulaFailed *enrichednow.FormulaRunFailedError
+	if errors.As(err, &formulaFailed) {
+		return formulaRunFailed(formulaFailed.Run)
 	}
 	switch {
 	case errors.Is(err, enrichednow.ErrMissingAPIKey):
@@ -131,28 +155,82 @@ func apiFailure(api *enrichednow.APIError) *cliError {
 	case errors.Is(api, enrichednow.ErrAuthentication):
 		e.exit = exitAuth
 		e.hint = "Check the key: run `enrichednow login` again, or set " + envAPIKey + ". A revoked key cannot be used again; create a new one in the console."
+	case errors.Is(api, enrichednow.ErrPlanLimitReached): // before ErrPermission, which it matches too
+		switch api.Details["limit"] {
+		case "min_interval_minutes":
+			e.lines = append(e.lines, fmt.Sprintf("The plan runs a saved formula every %s at the shortest; this asked for every %s.",
+				minutes(api.Details["allowed"]), minutes(api.Details["asked"])))
+		case "schedules":
+			e.lines = append(e.lines, fmt.Sprintf("The plan allows %s active schedules at once, and %s are active.", number("allowed"), number("current")))
+		case "destinations":
+			e.lines = append(e.lines, fmt.Sprintf("The plan allows %s destinations for a saved formula.", number("allowed")))
+		}
+		e.hint = "Choose what the plan allows, or change the plan in the console, on the Billing page."
 	case errors.Is(api, enrichednow.ErrPermission):
 		if api.Details["reason"] == "email_not_verified" {
 			e.hint = "Confirm your email address with the link we mailed you, then try again."
 		} else if strings.HasPrefix(api.Path, "/v1/data") {
 			e.hint = fmt.Sprintf("Datasets is in early access: %s/datasets/#early-access", docsURL)
 		}
+	case errors.Is(api, enrichednow.ErrAttestationRequired):
+		e.lines = append(e.lines, fmt.Sprintf("The terms: %v, version %v. Read them in the console, on the Formulas page.", api.Details["kind"], api.Details["text_version"]))
+		e.hint = "An owner or an admin of the account accepts them in the console, on the Formulas page; an API key cannot. Then run it again."
+	case errors.Is(api, enrichednow.ErrRequirementMissing):
+		for _, missing := range api.Missing() {
+			what := missing
+			switch {
+			case missing == "product:data":
+				what += ": Datasets, which this account has not been given (early access)"
+			case strings.HasPrefix(missing, "product:"):
+				what += ": a product this account does not have"
+			case strings.HasPrefix(missing, "capability:"):
+				what += ": connect a provider for it in the console"
+			}
+			e.lines = append(e.lines, "Missing "+what+".")
+		}
+		e.hint = "See what the formula needs with `enrichednow formulas get " + formulaOf(api.Path) + "`."
+	case errors.Is(api, enrichednow.ErrFormulaUnavailable):
+		if status, ok := api.Details["status"].(string); ok {
+			e.lines = append(e.lines, "The formula is "+status+".")
+		}
+		e.hint = "List the formulas you can run with `enrichednow formulas list`."
+	case errors.Is(api, enrichednow.ErrSavedFormulaArchived):
+		e.hint = "An archived saved formula cannot be changed or run. Duplicate it to use it again: `enrichednow saved duplicate " + savedOf(api.Path) + "`."
 	case errors.Is(api, enrichednow.ErrNotFound):
 		switch {
 		case strings.HasPrefix(api.Path, "/v1/scrapers"):
 			e.hint = "List the scrapers with `enrichednow scrapers list`."
 		case strings.HasPrefix(api.Path, "/v1/runs"):
 			e.hint = "List your runs with `enrichednow runs list`."
+		case strings.HasPrefix(api.Path, "/v1/formulas"):
+			e.hint = "List the formulas with `enrichednow formulas list`."
+		case strings.HasPrefix(api.Path, "/v1/saved-formulas"):
+			e.hint = "List your saved formulas with `enrichednow saved list`."
+		case strings.HasPrefix(api.Path, "/v1/formula-runs"):
+			e.hint = "Check the run id: `enrichednow formulas run` prints it."
 		}
 	case errors.Is(api, enrichednow.ErrValidation):
-		if strings.HasPrefix(api.Path, "/v1/scrapers/") && strings.HasSuffix(api.Path, "/runs") {
+		switch {
+		case api.Code == enrichednow.CodeUnitCapTooLow:
+			if least, ok := api.MinUnitCap(); ok {
+				e.lines = append(e.lines, fmt.Sprintf("The least unit cap it takes is %d.", least))
+			}
+			e.hint = "Give a higher --unit-cap, or leave it out for the formula's own. No run was created."
+		case strings.HasPrefix(api.Path, "/v1/scrapers/") && strings.HasSuffix(api.Path, "/runs"):
 			id := strings.TrimSuffix(strings.TrimPrefix(api.Path, "/v1/scrapers/"), "/runs")
 			e.hint = fmt.Sprintf("See what it takes with `enrichednow scrapers show %s`. No run was created.", id)
+		case strings.HasPrefix(api.Path, "/v1/formulas/"):
+			e.hint = fmt.Sprintf("See its parameters with `enrichednow formulas get %s`.", formulaOf(api.Path))
 		}
-	case errors.Is(api, enrichednow.ErrLimitReached): // a limit of the account's own, or of the key: not the plan
+	case errors.Is(api, enrichednow.ErrLimitReached): // a limit of the account's own, of the key or of a saved formula: not the plan
 		whose, hint := "The account's monthly spend limit", "An owner, an admin or a billing user can raise or remove it in the console, on the Usage page."
-		if api.Details["scope"] == "key" {
+		switch api.Details["scope"] {
+		case "key":
 			whose, hint = "This API key's monthly limit", "Raise or remove the key's limit in the console, under API keys, or use another key."
+		case "saved_formula":
+			whose, hint = "This saved formula's monthly unit cap", "Raise or remove its monthly cap in the console, or wait for next month."
+		case "formula_run":
+			whose, hint = "This formula run's limit", "Give the run a higher --unit-cap."
 		}
 		e.lines = append(e.lines, fmt.Sprintf("%s: %s of %s units used this month; this run needs %s.", whose, number("used_units"), number("limit_units"), number("units_needed")))
 		e.hint = hint
@@ -179,6 +257,36 @@ func apiFailure(api *enrichednow.APIError) *cliError {
 		e.lines = append(e.lines, "Request id: "+api.RequestID)
 	}
 	return e
+}
+
+// minutes is an interval of the plan for a person: "hour", "day", "30 minutes".
+func minutes(v any) string {
+	n, _ := v.(float64)
+	switch {
+	case n == 60:
+		return "hour"
+	case n == 1440:
+		return "day"
+	case n > 0 && int(n)%1440 == 0:
+		return fmt.Sprintf("%d days", int(n)/1440)
+	}
+	return fmt.Sprintf("%.0f minutes", n)
+}
+
+// formulaOf is the formula id in the path of a request, or a placeholder.
+func formulaOf(path string) string {
+	if parts := strings.Split(strings.Trim(path, "/"), "/"); len(parts) >= 3 && parts[1] == "formulas" {
+		return parts[2]
+	}
+	return "<formula-id>"
+}
+
+// savedOf is the saved formula id in the path of a request, or a placeholder.
+func savedOf(path string) string {
+	if parts := strings.Split(strings.Trim(path, "/"), "/"); len(parts) >= 3 && parts[1] == "saved-formulas" {
+		return parts[2]
+	}
+	return "<saved-formula-id>"
 }
 
 // report prints an error and returns the exit code.
